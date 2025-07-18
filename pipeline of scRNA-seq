@@ -1,0 +1,258 @@
+Single-Cell RNA-Seq Analysis Pipeline with Seurat
+Below is a detailed pipeline for analyzing single-cell RNA-seq data using Seurat, including cell type annotation and differential gene expression analysis. This pipeline is designed to be shared on GitHub with proper documentation.
+
+GitHub Repository Structure
+text
+scRNAseq_analysis/
+├── data/
+│   ├── raw_data/          # Raw feature-barcode matrices
+│   └── processed_data/    # Processed Seurat objects
+├── results/
+│   ├── figures/           # All output plots
+│   ├── markers/           # Marker gene lists
+│   └── DE_results/        # Differential expression results
+├── scripts/
+│   ├── 1_quality_control.R
+│   ├── 2_normalization.R
+│   ├── 3_feature_selection.R
+│   ├── 4_dimensionality_reduction.R
+│   ├── 5_clustering.R
+│   ├── 6_celltype_annotation.R
+│   ├── 7_differential_expression.R
+│   └── utils.R            # Helper functions
+├── docs/
+│   ├── README.md          # Project overview
+│   └── requirements.md     # Software/dependency info
+└── scRNAseq_analysis.Rproj # R project file
+Detailed Analysis Pipeline
+1. Quality Control
+r
+# Script: scripts/1_quality_control.R
+
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+
+# Load data (example for 10X Genomics data)
+data <- Read10X(data.dir = "data/raw_data/filtered_feature_bc_matrix/")
+seurat_obj <- CreateSeuratObject(counts = data, project = "scRNA_project", min.cells = 3, min.features = 200)
+
+# Add mitochondrial percentage
+seurat_obj[["percent.mt"]] <- PercentageFeatureSet(seurat_obj, pattern = "^MT-")
+
+# QC metrics visualization
+qc_violin <- VlnPlot(seurat_obj, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+ggsave("results/figures/qc_violin_plot.pdf", qc_violin, width = 10, height = 6)
+
+# Filter cells
+seurat_obj <- subset(seurat_obj, 
+                    subset = nFeature_RNA > 200 & nFeature_RNA < 6000 & 
+                    percent.mt < 15 & nCount_RNA < 30000)
+
+# Save filtered object
+saveRDS(seurat_obj, "data/processed_data/seurat_filtered.rds")
+2. Normalization and Feature Selection
+r
+# Script: scripts/2_normalization.R
+
+library(Seurat)
+library(ggplot2)
+
+seurat_obj <- readRDS("data/processed_data/seurat_filtered.rds")
+
+# Normalization
+seurat_obj <- NormalizeData(seurat_obj, normalization.method = "LogNormalize", scale.factor = 10000)
+
+# Find variable features
+seurat_obj <- FindVariableFeatures(seurat_obj, selection.method = "vst", nfeatures = 2000)
+
+# Identify top variable features
+top10 <- head(VariableFeatures(seurat_obj), 10)
+var_feat_plot <- VariableFeaturePlot(seurat_obj)
+var_feat_plot <- LabelPoints(plot = var_feat_plot, points = top10, repel = TRUE)
+ggsave("results/figures/variable_features.pdf", var_feat_plot, width = 8, height = 6)
+
+saveRDS(seurat_obj, "data/processed_data/seurat_normalized.rds")
+3. Data Scaling and Dimensionality Reduction
+r
+# Script: scripts/3_dimensionality_reduction.R
+
+library(Seurat)
+library(ggplot2)
+
+seurat_obj <- readRDS("data/processed_data/seurat_normalized.rds")
+
+# Scale data
+all_genes <- rownames(seurat_obj)
+seurat_obj <- ScaleData(seurat_obj, features = all_genes)
+
+# PCA
+seurat_obj <- RunPCA(seurat_obj, features = VariableFeatures(object = seurat_obj))
+
+# Visualize PCA results
+pca_plot <- VizDimLoadings(seurat_obj, dims = 1:2, reduction = "pca")
+ggsave("results/figures/pca_loadings.pdf", pca_plot, width = 10, height = 6)
+
+pca_heatmap <- DimHeatmap(seurat_obj, dims = 1:15, cells = 500, balanced = TRUE)
+ggsave("results/figures/pca_heatmap.pdf", pca_heatmap, width = 10, height = 16)
+
+# Determine dimensionality
+elbow_plot <- ElbowPlot(seurat_obj)
+ggsave("results/figures/elbow_plot.pdf", elbow_plot, width = 6, height = 4)
+
+saveRDS(seurat_obj, "data/processed_data/seurat_pca.rds")
+4. Clustering
+r
+# Script: scripts/4_clustering.R
+
+library(Seurat)
+library(ggplot2)
+
+seurat_obj <- readRDS("data/processed_data/seurat_pca.rds")
+
+# Find neighbors and clusters
+seurat_obj <- FindNeighbors(seurat_obj, dims = 1:15)
+seurat_obj <- FindClusters(seurat_obj, resolution = 0.5)
+
+# UMAP
+seurat_obj <- RunUMAP(seurat_obj, dims = 1:15)
+
+# Visualization
+umap_plot <- DimPlot(seurat_obj, reduction = "umap", label = TRUE)
+ggsave("results/figures/umap_clusters.pdf", umap_plot, width = 8, height = 6)
+
+saveRDS(seurat_obj, "data/processed_data/seurat_clustered.rds")
+5. Cell Type Annotation
+r
+# Script: scripts/5_celltype_annotation.R
+
+library(Seurat)
+library(ggplot2)
+library(SingleR)
+library(celldex)
+library(dplyr)
+
+seurat_obj <- readRDS("data/processed_data/seurat_clustered.rds")
+
+# Find markers for each cluster
+markers <- FindAllMarkers(seurat_obj, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+write.csv(markers, "results/markers/cluster_markers.csv", row.names = FALSE)
+
+# Automated annotation with SingleR (using Human Primary Cell Atlas as example)
+ref <- celldex::HumanPrimaryCellAtlasData()
+singler_results <- SingleR(test = as.SingleCellExperiment(seurat_obj), ref = ref, labels = ref$label.main)
+
+# Add annotations to Seurat object
+seurat_obj$singler_labels <- singler_results$labels
+
+# Visualize automated annotations
+annotation_plot <- DimPlot(seurat_obj, group.by = "singler_labels", label = TRUE) + NoLegend()
+ggsave("results/figures/umap_automated_annotation.pdf", annotation_plot, width = 8, height = 6)
+
+# Manual annotation based on marker genes
+new_cluster_ids <- c("Naive CD4+ T", "Memory CD4+ T", "CD14+ Mono", "B", "CD8+ T",
+                     "FCGR3A+ Mono", "NK", "DC", "Platelet")
+names(new_cluster_ids) <- levels(seurat_obj)
+seurat_obj <- RenameIdents(seurat_obj, new_cluster_ids)
+
+# Save annotated object
+saveRDS(seurat_obj, "data/processed_data/seurat_annotated.rds")
+
+# Visualization of final annotations
+final_annotation_plot <- DimPlot(seurat_obj, reduction = "umap", label = TRUE, pt.size = 0.5) + NoLegend()
+ggsave("results/figures/umap_final_annotation.pdf", final_annotation_plot, width = 8, height = 6)
+6. Differential Expression Analysis
+r
+# Script: scripts/6_differential_expression.R
+
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+library(EnhancedVolcano)
+
+seurat_obj <- readRDS("data/processed_data/seurat_annotated.rds")
+
+# Set identity to cell types
+Idents(seurat_obj) <- "singler_labels"
+
+# Compare two specific cell types
+de_results <- FindMarkers(seurat_obj, 
+                         ident.1 = "CD14+ Mono", 
+                         ident.2 = "FCGR3A+ Mono",
+                         min.pct = 0.25)
+
+write.csv(de_results, "results/DE_results/mono_subtypes_DE.csv")
+
+# Volcano plot
+volcano_plot <- EnhancedVolcano(de_results,
+                                lab = rownames(de_results),
+                                x = 'avg_log2FC',
+                                y = 'p_val_adj',
+                                title = 'CD14+ Mono vs FCGR3A+ Mono',
+                                pCutoff = 0.05,
+                                FCcutoff = 1)
+ggsave("results/figures/volcano_mono_subtypes.pdf", volcano_plot, width = 8, height = 6)
+
+# Find markers for all cell types
+all_markers <- FindAllMarkers(seurat_obj, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+write.csv(all_markers, "results/markers/all_celltype_markers.csv", row.names = FALSE)
+
+# Heatmap of top markers
+top_markers <- all_markers %>% group_by(cluster) %>% top_n(n = 5, wt = avg_log2FC)
+heatmap_plot <- DoHeatmap(seurat_obj, features = top_markers$gene) + NoLegend()
+ggsave("results/figures/top_markers_heatmap.pdf", heatmap_plot, width = 12, height = 8)
+GitHub README.md Template
+markdown
+# Single-Cell RNA-Seq Analysis Pipeline
+
+This repository contains a complete pipeline for analyzing single-cell RNA-seq data using Seurat, including quality control, normalization, clustering, cell type annotation, and differential expression analysis.
+
+## Pipeline Overview
+
+1. Quality control and filtering
+2. Normalization and feature selection
+3. Dimensionality reduction (PCA)
+4. Clustering (UMAP/tSNE)
+5. Cell type annotation (SingleR + manual)
+6. Differential expression analysis
+
+## Requirements
+
+- R (>= 4.0.0)
+- Seurat (>= 4.0.0)
+- Additional R packages (see `docs/requirements.md`)
+
+## Usage
+
+1. Clone this repository
+2. Install required packages
+3. Run scripts in order (1_quality_control.R to 6_differential_expression.R)
+4. Modify parameters as needed for your dataset
+
+## Data Organization
+
+- Raw data should be placed in `data/raw_data/`
+- Processed data will be saved in `data/processed_data/`
+- Results (figures, tables) will be saved in `results/`
+
+## License
+
+[MIT License](LICENSE)
+Best Practices for GitHub Sharing
+Include a detailed README.md with usage instructions
+
+Add a LICENSE file
+
+Use .gitignore to exclude large data files
+
+Include sessionInfo() output in your scripts
+
+Document all parameters that might need adjustment
+
+Consider creating an R package for reusable functions
+
+Add example data or instructions for testing the pipeline
+
+This pipeline provides a comprehensive workflow that can be easily shared and reproduced on GitHub, with clear documentation and modular script organization.
+
+New chat
