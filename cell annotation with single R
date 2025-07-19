@@ -1,0 +1,174 @@
+Single-Cell RNA-Seq Cell Type Annotation with SingleR
+This repository provides a comprehensive workflow for automated cell type annotation of single-cell RNA sequencing data using the SingleR package in R. The pipeline integrates with Seurat objects and provides multiple annotation approaches using reference datasets from celldex.
+
+Table of Contents
+Overview
+
+Installation
+
+Quick Start
+
+Detailed Workflow
+
+Reference Datasets
+
+Output Interpretation
+
+Customization
+
+Troubleshooting
+
+License
+
+Overview
+https://bioconductor.org/packages/release/bioc/vignettes/SingleR/inst/doc/SingleR.png
+
+This pipeline performs cell type annotation using:
+
+SingleR - Automated annotation with reference datasets
+
+Multiple reference options - Human and mouse datasets available
+
+Visualization - UMAP plots with annotated labels
+
+Quality control - Label consistency scores
+
+Installation
+r
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install(c("SingleR", "celldex", "scran"))
+install.packages(c("Seurat", "tidyverse", "patchwork"))
+Quick Start
+r
+# Load required packages
+library(SingleR)
+library(celldex)
+library(Seurat)
+
+# Load your Seurat object
+seurat_obj <- readRDS("path/to/your/seurat_object.rds")
+
+# Get reference dataset
+ref <- celldex::HumanPrimaryCellAtlasData()
+
+# Run SingleR
+annotations <- SingleR(
+  test = as.SingleCellExperiment(seurat_obj),
+  ref = ref,
+  labels = ref$label.main
+)
+
+# Add annotations to Seurat object
+seurat_obj$SingleR_labels <- annotations$labels
+
+# Save annotated object
+saveRDS(seurat_obj, "seurat_annotated.rds")
+Detailed Workflow
+1. Prepare Reference Data
+r
+# Human references
+hpca_ref <- celldex::HumanPrimaryCellAtlasData()
+dice_ref <- celldex::DatabaseImmuneCellExpressionData()
+blueprint_ref <- celldex::BlueprintEncodeData()
+
+# Mouse references
+mouse_ref <- celldex::MouseRNAseqData()
+immgen_ref <- celldex::ImmGenData()
+2. Run SingleR Annotation
+r
+# Convert Seurat to SingleCellExperiment
+sce <- as.SingleCellExperiment(seurat_obj)
+
+# Main-level annotation
+main_labels <- SingleR(
+  test = sce,
+  ref = hpca_ref,
+  labels = hpca_ref$label.main,
+  clusters = seurat_obj$seurat_clusters
+)
+
+# Fine-level annotation
+fine_labels <- SingleR(
+  test = sce,
+  ref = hpca_ref,
+  labels = hpca_ref$label.fine,
+  clusters = seurat_obj$seurat_clusters
+)
+3. Quality Control of Annotations
+r
+# Plot annotation scores
+plotScoreHeatmap(main_labels)
+
+# Compare multiple references
+pred <- SingleR(
+  test = sce,
+  ref = list(HPCA = hpca_ref, Blueprint = blueprint_ref, DICE = dice_ref),
+  labels = list(hpca_ref$label.main, blueprint_ref$label.main, dice_ref$label.main)
+)
+
+plotScoreHeatmap(pred)
+4. Visualize Annotations
+r
+library(ggplot2)
+
+# Add annotations to Seurat object
+seurat_obj$SingleR_main <- main_labels$labels
+seurat_obj$SingleR_fine <- fine_labels$labels
+
+# Plot UMAP with annotations
+DimPlot(seurat_obj, group.by = "SingleR_main", label = TRUE) + 
+  ggtitle("SingleR Main Cell Types")
+
+DimPlot(seurat_obj, group.by = "SingleR_fine", label = TRUE) + 
+  ggtitle("SingleR Fine Cell Types")
+Reference Datasets
+Dataset	Description	Species
+HumanPrimaryCellAtlasData()	37 immune and non-immune cell types	Human
+BlueprintEncodeData()	24 immune and stromal cell types	Human
+DatabaseImmuneCellExpressionData()	15 immune cell types	Human
+MouseRNAseqData()	28 immune and non-immune cell types	Mouse
+ImmGenData()	253 immune cell types	Mouse
+Output Interpretation
+SingleR Results Object:
+
+labels: Predicted cell type labels
+
+scores: Numeric scores for each label
+
+pruned.labels: Labels after pruning uncertain calls
+
+Quality Metrics:
+
+High scores (>0.5) indicate confident assignments
+
+Consistent scores across cells of same cluster
+
+Discrepancies between references may indicate ambiguous cell states
+
+Customization
+Cluster-Level Annotation
+r
+# Run SingleR at cluster level
+cluster_ann <- SingleR(
+  test = sce,
+  ref = hpca_ref,
+  labels = hpca_ref$label.main,
+  clusters = seurat_obj$seurat_clusters,
+  method = "cluster"
+)
+
+# Propagate cluster labels to cells
+seurat_obj$SingleR_cluster <- cluster_ann$labels[seurat_obj$seurat_clusters]
+Custom Reference
+r
+# Create custom reference from another Seurat object
+custom_ref <- GetAssayData(reference_seurat, slot = "data")
+custom_labels <- reference_seurat$cell_types
+
+custom_ann <- SingleR(
+  test = sce,
+  ref = custom_ref,
+  labels = custom_labels
+)
